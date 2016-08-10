@@ -1,5 +1,9 @@
 #lang racket
 
+; Constants
+(define buffer-size 256)
+
+; Pure functions
 (define (remove-trailing-spaces str)
   (let [(reg-match (regexp-match #px"^(.*\\S)\\s*$" str))]
     (if reg-match
@@ -9,19 +13,42 @@
 (define (write-line line hfile)
   (write-string (string-append line (string #\newline)) hfile))
 
-(define (stringln-size str)
+(define (stringnl-size str)
   (bytes-length (string->bytes/utf-8 (string-append str (string #\newline)))))
 
-(define (prune-helper hrfile hwfile num-bytes)
-  (let [(line (read-line hrfile 'any))]
-    (if (not (eof-object? line))
-        (let [(pruned-line (remove-trailing-spaces line))]
-          (write-line pruned-line hwfile)
-          (prune-helper hrfile hwfile (+ num-bytes (stringln-size pruned-line))))
-        (- num-bytes (stringln-size "")))))
+(define (remove-CR str)
+  (string-replace str "\r" ""))
+
+(define (split-endl str)
+  (string-split str "\n"))
+
+(define (all-but-last lst)
+  (if (null? (cdr lst))
+      '()
+      (cons (car lst) (all-but-last (cdr lst)))))
+
+; Functions with side effects
+(define (write-nl hfile line last?)
+  (write-line line hfile)
+  (if last?
+      (bytes-length (string->bytes/utf-8 line))
+      (stringnl-size line)))
+
+(define (prune-helper hrfile hwfile prev-buffer num-bytes)
+  (let [(fresh-buffer (read-string buffer-size hrfile))]
+    (if (not (eof-object? fresh-buffer))
+        (let [(curr-buffer-list (split-endl (remove-CR (string-append prev-buffer fresh-buffer))))]
+          (prune-helper hrfile
+                        hwfile
+                        (last curr-buffer-list)
+                        (+ num-bytes (apply +
+                                            (map
+                                             (λ (line) (write-nl hwfile (remove-trailing-spaces line) #f))
+                                             (all-but-last curr-buffer-list))))))
+        (+ num-bytes (write-nl hwfile (remove-trailing-spaces prev-buffer) #t)))))
 
 (define (prune hrfile hwfile old-filesize)
-  (let [(new-filesize (prune-helper hrfile hwfile 0))]
+  (let [(new-filesize (prune-helper hrfile hwfile "" 0))]
     (printf "Number of bytes pruned = ~v\n" (- old-filesize new-filesize))
     (file-truncate hwfile new-filesize)))
 
@@ -33,6 +60,6 @@
   (close-output-port hwfile))
 
 (for-each prune-file (command-line
-                   #:program "rkt_prune"
-                   #:args (filename . rest)
-                   (cons filename rest)))
+                      #:program "rkt_prune"
+                      #:args (filename . rest)
+                      (cons filename rest)))
